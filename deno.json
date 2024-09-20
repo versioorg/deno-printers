@@ -1,5 +1,5 @@
 {
-    "name": "@denyncrawford/printers",
+    "name": "@versioorg/printers",
     "version": "0.1.16",
     "exports": "./mod.ts",
     "tasks": {
