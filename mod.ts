@@ -10,7 +10,7 @@ import metadata from "./deno.json" with { type: "json" };
 const { symbols } = await dlopen(
   {
     name: "printer_bindings",
-    url: `https://github.com/denyncrawford/deno-printers/releases/download/${metadata.version}/`,
+    url: `https://github.com/versioorg/deno-printers/releases/download/${metadata.version}/`,
   },
   
   {
