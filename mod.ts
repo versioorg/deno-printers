@@ -61,7 +61,7 @@ export function getPrinters(): Printer[] {
  * @returns The printer with the given name.
  */
 export function getPrinterByName(name: string): Printer {
-  const pointer = symbols.get_printer_by_name(new TextEncoder().encode(name));
+    const pointer = symbols.get_printer_by_name(new TextEncoder().encode(name + "\0"));
   return JSON.parse(new Deno.UnsafePointerView(pointer!).getCString());
 }
 
@@ -75,9 +75,9 @@ export function getPrinterByName(name: string): Printer {
 export function print(printer: Printer, text: string, jobName?: string): boolean {
   const encoder = new TextEncoder();
   const pointer = symbols.print(
-    encoder.encode(printer.name),
-    encoder.encode(text),
-    jobName ? encoder.encode(jobName) : null,
+        encoder.encode(printer.name + "\0"),
+        encoder.encode(text + "\0"),
+        jobName ? encoder.encode(jobName + "\0") : null,
   );
   return pointer
 }
@@ -92,9 +92,9 @@ export function print(printer: Printer, text: string, jobName?: string): boolean
 export function printFile(printer: Printer, file: string, jobName?: string): boolean {
   const encoder = new TextEncoder();
   const pointer = symbols.print_file(
-    encoder.encode(printer.name),
-    encoder.encode(file),
-    jobName ? encoder.encode(jobName) : null,
+        encoder.encode(printer.name + "\0"),
+        encoder.encode(file + "\0"),
+        jobName ? encoder.encode(jobName + "\0") : null,
   );
   return pointer
 }
