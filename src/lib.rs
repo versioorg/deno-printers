@@ -5,6 +5,7 @@ use serde::ser::SerializeStruct;
 use serde::{Serialize, Serializer};
 use std::ptr;
 
+use std::process::Command;
 // #[derive(Serialize)]
 pub struct PrinterWrapper<'a> {
     pub printer: &'a printers::printer::Printer,
@@ -182,13 +183,13 @@ fn print_file(printer: *mut i8, file: *mut i8, job_name: *mut i8) -> bool {
             }
         };
 
-        let printer = match printers::get_printer_by_name(printer_name) {
-            Some(p) => p,
-            None => {
-                eprintln!("Error: Printer not found");
-                return false;
-            }
-        };
+        // let printer = match printers::get_printer_by_name(printer_name) {
+        //     Some(p) => p,
+        //     None => {
+        //         eprintln!("Error: Printer not found");
+        //         return false;
+        //     }
+        // };
 
         let file = match CStr::from_ptr(file).to_str() {
             Ok(f) => f,
@@ -206,15 +207,60 @@ fn print_file(printer: *mut i8, file: *mut i8, job_name: *mut i8) -> bool {
             }
         };
 
-        match printer.print_file(file, job_name) {
+        match my_print(printer_name, file, job_name) {
             Ok(_) => {
-                println!("File '{}' sent to printer '{}'", file, printer_name);
+                println!("Document sent to printer successfully.");
                 true
-            },
+            }
             Err(err) => {
-                eprintln!("Error printing file: {}", err);
+                eprintln!("Error: {}", err);
                 false
             }
         }
+    
+        // match /*let _ =*/ my_print(printer_name, file, job_name)  {
+        //     Ok(_) => {
+        //         println!("File '{}' sent to printer '{}'", file, printer_name);
+        //         true
+        //     },
+        //     Err(err) => {
+        //         eprintln!("Error printing file: {}", err);
+        //         false
+        //     }
+        // }
+
+        // match printer.print_file(file, job_name) {
+        //     Ok(_) => {
+        //         println!("File '{}' sent to printer '{}'", file, printer_name);
+        //         true
+        //     },
+        //     Err(err) => {
+        //         eprintln!("Error printing file: {}", err);
+        //         false
+        //     }
+        // }
+    }
+}
+
+/**
+ * Print on windows systems using winspool
+ */
+pub fn my_print(printer_system_name: &str, file_path: &str, job_name: Option<&str>) -> Result<bool, String> {
+    // let result = lpr::add_job("123".as_bytes(), printer_system_name, job_name);
+    let job_name = job_name.unwrap_or(file_path);
+    let status = Command::new("powershell")
+    .args(&[
+        "-Command",
+        &format!(
+            "Start-Job -ScriptBlock {{ Get-Content '{}' -Raw | Out-Printer -Name '{}' }} -Name '{}' *> $null; Wait-Job -Name '{}' | Receive-Job *> $null",
+            file_path, printer_system_name, job_name, job_name
+        ),
+    ])
+    .spawn();
+
+    return if status.is_ok() {
+        Result::Ok(true)
+    } else {
+        Result::Err("failure to send document to printer".to_string())
     }
 }
