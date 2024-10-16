@@ -3,9 +3,10 @@ use std::ffi::{CStr, CString};
 use deno_bindgen::deno_bindgen;
 use serde::ser::SerializeStruct;
 use serde::{Serialize, Serializer};
-use std::ptr;
+use std::{fs, ptr};
 
-use std::process::Command;
+use std::io::Read;
+//use std::process::Command;
 // #[derive(Serialize)]
 pub struct PrinterWrapper<'a> {
     pub printer: &'a printers::printer::Printer,
@@ -242,25 +243,123 @@ fn print_file(printer: *mut i8, file: *mut i8, job_name: *mut i8) -> bool {
     }
 }
 
-/**
- * Print on windows systems using winspool
- */
-pub fn my_print(printer_system_name: &str, file_path: &str, job_name: Option<&str>) -> Result<bool, String> {
-    // let result = lpr::add_job("123".as_bytes(), printer_system_name, job_name);
-    let job_name = job_name.unwrap_or(file_path);
-    let status = Command::new("powershell")
-    .args(&[
-        "-Command",
-        &format!(
-            "Start-Job -ScriptBlock {{ Get-Content '{}' -Raw | Out-Printer -Name '{}' }} -Name '{}' *> $null; Wait-Job -Name '{}' | Receive-Job *> $null",
-            file_path, printer_system_name, job_name, job_name
-        ),
-    ])
-    .spawn();
 
-    return if status.is_ok() {
-        Result::Ok(true)
-    } else {
-        Result::Err("failure to send document to printer".to_string())
+pub fn my_print(printer_system_name: &str, file_path: &str, job_name: Option<&str>) -> Result<bool, String> {
+    // Jeśli job_name nie jest przekazany, użyj file_path jako domyślną nazwę zadania
+    let job_name = job_name.unwrap_or(file_path);
+
+    
+        // Odczyt pliku do stringa
+        let mut file_content = String::new();
+        match fs::File::open(file_path) {
+            Ok(mut file) => {
+                if let Err(e) = file.read_to_string(&mut file_content) {
+                    return Err(format!("Failed to read file '{}': {}", file_path, e));
+                }
+            }
+            Err(e) => return Err(format!("Failed to open file '{}': {}", file_path, e)),
+        }
+
+        // Wywołanie funkcji write_to_device, aby wysłać zawartość pliku do drukarki
+        match write_to_device(printer_system_name, &file_content) {
+            Ok(bytes_written) => {
+                println!(
+                    "Successfully sent {} bytes to the printer '{}' for job '{}'.",
+                    bytes_written, printer_system_name, job_name
+                );
+                Ok(true)
+            }
+            Err(e) => Err(format!(
+                "Failed to write to the printer '{}': {}",
+                printer_system_name, e
+            )),
+        }
+}
+
+// Funkcja write_to_device wysyłająca dane do urządzenia drukarki na Windowsie
+// from https://crates.io/crates/raw-printer
+#[cfg(target_os = "windows")]
+pub fn write_to_device(printer: &str, payload: &str) -> Result<usize, std::io::Error> {
+    use std::ffi::CString;
+    use std::ptr;
+    use windows::Win32::Foundation::HANDLE;
+    use windows::Win32::Graphics::Printing::{
+        ClosePrinter, EndDocPrinter, EndPagePrinter, OpenPrinterA, StartDocPrinterA,
+        StartPagePrinter, WritePrinter, DOC_INFO_1A, PRINTER_ACCESS_USE, PRINTER_DEFAULTSA,
+    };
+
+    let printer_name = CString::new(printer).unwrap_or_default(); // null-terminated string
+    let mut printer_handle: HANDLE = HANDLE(std::ptr::null_mut());
+
+    // Otwórz drukarkę
+    unsafe {
+        let pd = PRINTER_DEFAULTSA {
+            pDatatype: windows::core::PSTR(ptr::null_mut()),
+            pDevMode: ptr::null_mut(),
+            DesiredAccess: PRINTER_ACCESS_USE,
+        };
+
+        if OpenPrinterA(
+            windows::core::PCSTR(printer_name.as_bytes().as_ptr()),
+            &mut printer_handle,
+            Some(&pd),
+        )
+        .is_ok()
+        {
+            let doc_info = DOC_INFO_1A {
+                pDocName: windows::core::PSTR("My Document\0".as_ptr() as *mut u8),
+                pOutputFile: windows::core::PSTR::null(),
+                pDatatype: windows::core::PSTR("RAW\0".as_ptr() as *mut u8),
+            };
+
+            // Rozpocznij dokument
+            let job = StartDocPrinterA(printer_handle, 1, &doc_info as *const _ as _);
+            if job == 0 {
+                return Err(std::io::Error::from(windows::core::Error::from_win32()));
+            }
+
+            // Rozpocznij stronę
+            if !StartPagePrinter(printer_handle).as_bool() {
+                return Err(std::io::Error::from(windows::core::Error::from_win32()));
+            }
+
+            let buffer = payload.as_bytes();
+
+            let mut bytes_written: u32 = 0;
+            if !WritePrinter(
+                printer_handle,
+                buffer.as_ptr() as _,
+                buffer.len() as u32,
+                &mut bytes_written,
+            )
+            .as_bool()
+            {
+                return Err(std::io::Error::from(windows::core::Error::from_win32()));
+            }
+
+            // Zakończ stronę i dokument
+            let _ = EndPagePrinter(printer_handle);
+            let _ = EndDocPrinter(printer_handle);
+            let _ = ClosePrinter(printer_handle);
+            return Ok(bytes_written as usize);
+        } else {
+            return Err(std::io::Error::from(windows::core::Error::from_win32()));
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
+pub fn write_to_device(printer: &str, payload: &str) -> Result<usize, std::io::Error> {
+    use std::fs::OpenOptions;
+    use std::io::Write;
+
+    let device_path = OpenOptions::new().write(true).open(printer);
+
+    match device_path {
+        Ok(mut device) => {
+            let bytes_written = device.write(payload.as_bytes())?;
+            Ok(bytes_written)
+        }
+        Err(e) => Err(std::io::Error::new(std::io::ErrorKind::Other, e)),
     }
 }
