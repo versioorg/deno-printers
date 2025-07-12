@@ -1,6 +1,6 @@
 {
     "name": "@versioorg/printers",
-    "version": "0.1.22",
+    "version": "0.1.23",
     "exports": "./mod.ts",
     "tasks": {
         "build": "deno_bindgen -o bindings.ts"

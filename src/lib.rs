@@ -245,72 +245,77 @@ pub fn my_print(printer_system_name: &str, file_path: &str, job_name: Option<&st
 #[cfg(target_os = "windows")]
 pub fn write_to_device(printer: &str, payload: &[u8]) -> Result<usize, std::io::Error> {
     use std::ffi::CString;
-    use std::ptr;
-    use windows::Win32::Foundation::HANDLE;
-    use windows::Win32::Graphics::Printing::{
-        ClosePrinter, EndDocPrinter, EndPagePrinter, OpenPrinterA, StartDocPrinterA,
-        StartPagePrinter, WritePrinter, DOC_INFO_1A, PRINTER_ACCESS_USE, PRINTER_DEFAULTSA,
+    use std::ptr::null_mut;
+    use windows::core::PCSTR;
+    use windows::Win32::Foundation::{HANDLE, GetLastError};
+    use windows::Win32::Graphics::Gdi::{StartPagePrinter, EndPagePrinter};
+    use windows::Win32::System::Printer::{
+        ClosePrinter, EndDocPrinter, OpenPrinterA, StartDocPrinterA,
+        WritePrinter, DOC_INFO_1A,
     };
 
-    let printer_name = CString::new(printer).unwrap_or_default(); // null-terminated string
-    let mut printer_handle: HANDLE = HANDLE(std::ptr::null_mut());
+    let mut h_printer: HANDLE = HANDLE(null_mut());
+    let mut dw_written = 0u32;
 
-    // Otwórz drukarkę
     unsafe {
-        let pd = PRINTER_DEFAULTSA {
-            pDatatype: windows::core::PSTR(ptr::null_mut()),
-            pDevMode: ptr::null_mut(),
-            DesiredAccess: PRINTER_ACCESS_USE,
-        };
+        let printer_name_cstr = CString::new(printer).unwrap();
 
         if OpenPrinterA(
-            windows::core::PCSTR(printer_name.as_bytes().as_ptr()),
-            &mut printer_handle,
-            Some(&pd),
+            PCSTR(printer_name_cstr.as_ptr() as *const u8),
+            &mut h_printer,
+            null_mut(),
         )
-        .is_ok()
+        .as_bool()
         {
-            let doc_info = DOC_INFO_1A {
-                pDocName: windows::core::PSTR("My Document\0".as_ptr() as *mut u8),
-                pOutputFile: windows::core::PSTR::null(),
-                pDatatype: windows::core::PSTR("RAW\0".as_ptr() as *mut u8),
+            let doc_name = CString::new("Wydruk z programu: versio").unwrap();
+            let data_type = CString::new("RAW").unwrap();
+
+            let mut info = DOC_INFO_1A {
+                pDocName: doc_name.as_ptr() as *mut u8,
+                pOutputFile: null_mut(),
+                pDatatype: data_type.as_ptr() as *mut u8,
             };
 
-            // Rozpocznij dokument
-            let job = StartDocPrinterA(printer_handle, 1, &doc_info as *const _ as _);
-            if job == 0 {
-                return Err(std::io::Error::from(windows::core::Error::from_win32()));
+            if !StartDocPrinterA(h_printer, 1, &mut info as *mut _ as *mut _).as_bool() {
+                ClosePrinter(h_printer);
+                return Err(std::io::Error::new(std::io::ErrorKind::Other, "StartDocPrinterA failed"));
             }
 
-            // Rozpocznij stronę
-            if !StartPagePrinter(printer_handle).as_bool() {
-                return Err(std::io::Error::from(windows::core::Error::from_win32()));
+            if !StartPagePrinter(h_printer).as_bool() {
+                EndDocPrinter(h_printer);
+                ClosePrinter(h_printer);
+                return Err(std::io::Error::new(std::io::ErrorKind::Other, "StartPagePrinter failed"));
             }
 
-            let buffer = payload;
-
-            let mut bytes_written: u32 = 0;
             if !WritePrinter(
-                printer_handle,
-                buffer.as_ptr() as _,
-                buffer.len() as u32,
-                &mut bytes_written,
+                h_printer,
+                payload.as_ptr() as _,
+                payload.len() as u32,
+                &mut dw_written,
             )
             .as_bool()
             {
-                return Err(std::io::Error::from(windows::core::Error::from_win32()));
+                EndPagePrinter(h_printer);
+                EndDocPrinter(h_printer);
+                ClosePrinter(h_printer);
+                return Err(std::io::Error::new(std::io::ErrorKind::Other, "WritePrinter failed"));
             }
 
-            // Zakończ stronę i dokument
-            let _ = EndPagePrinter(printer_handle);
-            let _ = EndDocPrinter(printer_handle);
-            let _ = ClosePrinter(printer_handle);
-            return Ok(bytes_written as usize);
+            EndPagePrinter(h_printer);
+            EndDocPrinter(h_printer);
+            ClosePrinter(h_printer);
+
+            Ok(dw_written as usize)
         } else {
-            return Err(std::io::Error::from(windows::core::Error::from_win32()));
+            let err_code = GetLastError().0;
+            Err(std::io::Error::new(
+                std::io::ErrorKind::Other,
+                format!("OpenPrinterA failed: code {}", err_code),
+            ))
         }
     }
 }
+
 
 #[cfg(target_os = "linux")]
 pub fn write_to_device(printer: &str, payload: &[u8]) -> Result<usize, std::io::Error> {
