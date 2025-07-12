@@ -26,7 +26,7 @@ impl<'a> Serialize for PrinterWrapper<'a> {
         S: Serializer,
     {
         let state_value = printer_state_to_string(&self.printer.state);
-        let mut printer_json = serializer.serialize_struct("Printer", 9)?;
+        let mut printer_json = serializer.serialize_struct("Printer", 8)?;
         printer_json.serialize_field("name", &self.printer.name)?;
         printer_json.serialize_field("system_name", &self.printer.system_name)?;
         printer_json.serialize_field("driver_name", &self.printer.driver_name)?;
@@ -244,78 +244,77 @@ pub fn my_print(printer_system_name: &str, file_path: &str, job_name: Option<&st
 // from https://crates.io/crates/raw-printer
 #[cfg(target_os = "windows")]
 pub fn write_to_device(printer: &str, payload: &[u8]) -> Result<usize, std::io::Error> {
-    use std::ffi::CString;
     use std::ptr::null_mut;
-    use windows::core::PCSTR;
-    use windows::Win32::Foundation::{HANDLE, GetLastError};
-    use windows::Win32::Graphics::Gdi::{StartPagePrinter, EndPagePrinter};
-    use windows::Win32::System::Printer::{
-        ClosePrinter, EndDocPrinter, OpenPrinterA, StartDocPrinterA,
-        WritePrinter, DOC_INFO_1A,
+    use windows::core::{PCSTR, PSTR};
+    use windows::Win32::Foundation::HANDLE;
+    use windows::Win32::Graphics::Printing::{
+        OpenPrinterA, StartDocPrinterA, StartPagePrinter, WritePrinter,
+        EndPagePrinter, EndDocPrinter, ClosePrinter, DOC_INFO_1A,
     };
 
-    let mut h_printer: HANDLE = HANDLE(null_mut());
-    let mut dw_written = 0u32;
-
     unsafe {
-        let printer_name_cstr = CString::new(printer).unwrap();
+        let printer_cstr = CString::new(printer).map_err(|_| {
+            std::io::Error::new(std::io::ErrorKind::InvalidInput, "Invalid printer name")
+        })?;
 
-        if OpenPrinterA(
-            PCSTR(printer_name_cstr.as_ptr() as *const u8),
-            &mut h_printer,
-            null_mut(),
+        let mut h_printer: HANDLE = HANDLE(null_mut());
+
+        // Otwórz drukarkę
+        OpenPrinterA(PCSTR(printer_cstr.as_ptr() as *const u8), &mut h_printer, None)
+            .map_err(|_| std::io::Error::new(std::io::ErrorKind::Other, "OpenPrinterA failed"))?;
+
+        let doc_name = CString::new("versio").unwrap();
+        let data_type = CString::new("RAW").unwrap();
+
+        let mut doc_info = DOC_INFO_1A {
+            pDocName: PSTR(doc_name.as_ptr() as *mut u8),
+            pOutputFile: PSTR::null(),
+            pDatatype: PSTR(data_type.as_ptr() as *mut u8),
+        };
+
+        if StartDocPrinterA(h_printer, 1, &mut doc_info as *mut _ as *mut _) == 0 {
+            let _ = ClosePrinter(h_printer);
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::Other,
+                "StartDocPrinterA failed",
+            ));
+        }
+
+        if !StartPagePrinter(h_printer).as_bool() {
+            let _ = EndDocPrinter(h_printer);
+            let _ = ClosePrinter(h_printer);
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::Other,
+                "StartPagePrinter failed",
+            ));
+        }
+
+        let mut bytes_written = 0u32;
+
+        if !WritePrinter(
+            h_printer,
+            payload.as_ptr() as *const _,
+            payload.len() as u32,
+            &mut bytes_written,
         )
         .as_bool()
         {
-            let doc_name = CString::new("Wydruk z programu: versio").unwrap();
-            let data_type = CString::new("RAW").unwrap();
-
-            let mut info = DOC_INFO_1A {
-                pDocName: doc_name.as_ptr() as *mut u8,
-                pOutputFile: null_mut(),
-                pDatatype: data_type.as_ptr() as *mut u8,
-            };
-
-            if !StartDocPrinterA(h_printer, 1, &mut info as *mut _ as *mut _).as_bool() {
-                ClosePrinter(h_printer);
-                return Err(std::io::Error::new(std::io::ErrorKind::Other, "StartDocPrinterA failed"));
-            }
-
-            if !StartPagePrinter(h_printer).as_bool() {
-                EndDocPrinter(h_printer);
-                ClosePrinter(h_printer);
-                return Err(std::io::Error::new(std::io::ErrorKind::Other, "StartPagePrinter failed"));
-            }
-
-            if !WritePrinter(
-                h_printer,
-                payload.as_ptr() as _,
-                payload.len() as u32,
-                &mut dw_written,
-            )
-            .as_bool()
-            {
-                EndPagePrinter(h_printer);
-                EndDocPrinter(h_printer);
-                ClosePrinter(h_printer);
-                return Err(std::io::Error::new(std::io::ErrorKind::Other, "WritePrinter failed"));
-            }
-
-            EndPagePrinter(h_printer);
-            EndDocPrinter(h_printer);
-            ClosePrinter(h_printer);
-
-            Ok(dw_written as usize)
-        } else {
-            let err_code = GetLastError().0;
-            Err(std::io::Error::new(
+            let _ = EndPagePrinter(h_printer);
+            let _ = EndDocPrinter(h_printer);
+            let _ = ClosePrinter(h_printer);
+            return Err(std::io::Error::new(
                 std::io::ErrorKind::Other,
-                format!("OpenPrinterA failed: code {}", err_code),
-            ))
+                "WritePrinter failed",
+            ));
         }
+
+        let _ = EndPagePrinter(h_printer);
+        let _ = EndDocPrinter(h_printer);
+        let _ = ClosePrinter(h_printer);
+
+        Ok(bytes_written as usize)
     }
 }
-
 
 #[cfg(target_os = "linux")]
 pub fn write_to_device(printer: &str, payload: &[u8]) -> Result<usize, std::io::Error> {
@@ -402,7 +401,7 @@ pub fn print_pdf(printer: &str, file_path: &str, _job_name: Option<&str>) -> Res
             "-NoProfile",
             "-Command",
             &format!(
-                r#"Start-Process -FilePath "{}" -Verb Print -ArgumentList '/p /h "{}"'"#,
+                r#"Start-Process -FilePath "{}" -Verb Print -ArgumentList '/p /h "{}""#,
                 file_path, printer_arg
             ),
         ]);
