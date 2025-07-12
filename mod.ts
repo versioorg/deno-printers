@@ -12,7 +12,6 @@ const { symbols } = await dlopen(
     name: "printer_bindings",
     url: `https://github.com/versioorg/deno-printers/releases/download/${metadata.version}/`,
   },
-  
   {
     get_printer_by_name: {
       parameters: ["buffer"],
@@ -25,26 +24,22 @@ const { symbols } = await dlopen(
       nonblocking: false,
     },
     print_file: {
-      parameters: [
-        'buffer',
-        'buffer',
-        'buffer',
-      ],
-      result: 'bool',
-      nonblocking: false
+      parameters: ["buffer", "buffer", "buffer"],
+      result: "bool",
+      nonblocking: false,
     },
     print: {
-      parameters: [
-        'buffer',
-        'buffer',
-        'buffer',
-      ],
-      result: 'bool',
-      nonblocking: false
+      parameters: ["buffer", "buffer", "buffer"],
+      result: "bool",
+      nonblocking: false,
+    },
+    print_pdf_file: { // ✅ Dodajemy nowy symbol
+      parameters: ["buffer", "buffer", "buffer"],
+      result: "bool",
+      nonblocking: false,
     },
   }
 );
-
 
 /** 
  * This function returns a list of printers connected to the system. 
@@ -61,7 +56,7 @@ export function getPrinters(): Printer[] {
  * @returns The printer with the given name.
  */
 export function getPrinterByName(name: string): Printer {
-    const pointer = symbols.get_printer_by_name(new TextEncoder().encode(name + "\0"));
+  const pointer = symbols.get_printer_by_name(new TextEncoder().encode(name + "\0"));
   return JSON.parse(new Deno.UnsafePointerView(pointer!).getCString());
 }
 
@@ -74,12 +69,11 @@ export function getPrinterByName(name: string): Printer {
  */
 export function print(printer: Printer, text: string, jobName?: string): boolean {
   const encoder = new TextEncoder();
-  const pointer = symbols.print(
-        encoder.encode(printer.name + "\0"),
-        encoder.encode(text + "\0"),
-        jobName ? encoder.encode(jobName + "\0") : null,
+  return symbols.print(
+    encoder.encode(printer.name + "\0"),
+    encoder.encode(text + "\0"),
+    jobName ? encoder.encode(jobName + "\0") : null,
   );
-  return pointer
 }
 
 /** 
@@ -91,10 +85,25 @@ export function print(printer: Printer, text: string, jobName?: string): boolean
  */
 export function printFile(printer: Printer, file: string, jobName?: string): boolean {
   const encoder = new TextEncoder();
-  const pointer = symbols.print_file(
-        encoder.encode(printer.name + "\0"),
-        encoder.encode(file + "\0"),
-        jobName ? encoder.encode(jobName + "\0") : null,
+  return symbols.print_file(
+    encoder.encode(printer.name + "\0"),
+    encoder.encode(file + "\0"),
+    jobName ? encoder.encode(jobName + "\0") : null,
   );
-  return pointer
+}
+
+/** 
+ * This function prints a PDF file using a system-aware method (e.g. lp or PowerShell).  
+ * @param printer The printer to print to.
+ * @param file The path to the PDF file.
+ * @param jobName The name of the job.  
+ * @returns True if the PDF was printed successfully, false otherwise.
+ */
+export function printPdfFile(printer: Printer, file: string, jobName?: string): boolean {
+  const encoder = new TextEncoder();
+  return symbols.print_pdf_file(
+    encoder.encode(printer.name + "\0"),
+    encoder.encode(file + "\0"),
+    jobName ? encoder.encode(jobName + "\0") : null,
+  );
 }

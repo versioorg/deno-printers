@@ -5,7 +5,6 @@ use serde::ser::SerializeStruct;
 use serde::{Serialize, Serializer};
 use std::{fs, ptr};
 
-use std::io::Read;
 //use std::process::Command;
 // #[derive(Serialize)]
 pub struct PrinterWrapper<'a> {
@@ -184,14 +183,6 @@ fn print_file(printer: *mut i8, file: *mut i8, job_name: *mut i8) -> bool {
             }
         };
 
-        // let printer = match printers::get_printer_by_name(printer_name) {
-        //     Some(p) => p,
-        //     None => {
-        //         eprintln!("Error: Printer not found");
-        //         return false;
-        //     }
-        // };
-
         let file = match CStr::from_ptr(file).to_str() {
             Ok(f) => f,
             Err(_) => {
@@ -218,28 +209,6 @@ fn print_file(printer: *mut i8, file: *mut i8, job_name: *mut i8) -> bool {
                 false
             }
         }
-    
-        // match /*let _ =*/ my_print(printer_name, file, job_name)  {
-        //     Ok(_) => {
-        //         println!("File '{}' sent to printer '{}'", file, printer_name);
-        //         true
-        //     },
-        //     Err(err) => {
-        //         eprintln!("Error printing file: {}", err);
-        //         false
-        //     }
-        // }
-
-        // match printer.print_file(file, job_name) {
-        //     Ok(_) => {
-        //         println!("File '{}' sent to printer '{}'", file, printer_name);
-        //         true
-        //     },
-        //     Err(err) => {
-        //         eprintln!("Error printing file: {}", err);
-        //         false
-        //     }
-        // }
     }
 }
 
@@ -250,15 +219,10 @@ pub fn my_print(printer_system_name: &str, file_path: &str, job_name: Option<&st
 
     
         // Odczyt pliku do stringa
-        let mut file_content = String::new();
-        match fs::File::open(file_path) {
-            Ok(mut file) => {
-                if let Err(e) = file.read_to_string(&mut file_content) {
-                    return Err(format!("Failed to read file '{}': {}", file_path, e));
-                }
-            }
-            Err(e) => return Err(format!("Failed to open file '{}': {}", file_path, e)),
-        }
+        let file_content = match fs::read(file_path) {
+            Ok(bytes) => bytes,
+            Err(e) => return Err(format!("Failed to read file '{}': {}", file_path, e)),
+        };
 
         // Wywołanie funkcji write_to_device, aby wysłać zawartość pliku do drukarki
         match write_to_device(printer_system_name, &file_content) {
@@ -279,7 +243,7 @@ pub fn my_print(printer_system_name: &str, file_path: &str, job_name: Option<&st
 // Funkcja write_to_device wysyłająca dane do urządzenia drukarki na Windowsie
 // from https://crates.io/crates/raw-printer
 #[cfg(target_os = "windows")]
-pub fn write_to_device(printer: &str, payload: &str) -> Result<usize, std::io::Error> {
+pub fn write_to_device(printer: &str, payload: &[u8]) -> Result<usize, std::io::Error> {
     use std::ffi::CString;
     use std::ptr;
     use windows::Win32::Foundation::HANDLE;
@@ -323,7 +287,7 @@ pub fn write_to_device(printer: &str, payload: &str) -> Result<usize, std::io::E
                 return Err(std::io::Error::from(windows::core::Error::from_win32()));
             }
 
-            let buffer = payload.as_bytes();
+            let buffer = payload;
 
             let mut bytes_written: u32 = 0;
             if !WritePrinter(
@@ -349,7 +313,7 @@ pub fn write_to_device(printer: &str, payload: &str) -> Result<usize, std::io::E
 }
 
 #[cfg(target_os = "linux")]
-pub fn write_to_device(printer: &str, payload: &str) -> Result<usize, std::io::Error> {
+pub fn write_to_device(printer: &str, payload: &[u8]) -> Result<usize, std::io::Error> {
     use std::fs::OpenOptions;
     use std::io::Write;
 
@@ -357,9 +321,120 @@ pub fn write_to_device(printer: &str, payload: &str) -> Result<usize, std::io::E
 
     match device_path {
         Ok(mut device) => {
-            let bytes_written = device.write(payload.as_bytes())?;
+            let bytes_written = device.write(payload)?;
             Ok(bytes_written)
         }
         Err(e) => Err(std::io::Error::new(std::io::ErrorKind::Other, e)),
+    }
+}
+
+
+//////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+///////////////////////////////////// wydruk PDF /////////////////////////////////////////////////////////////////////////////////////////////////////////
+//////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+#[deno_bindgen]
+fn print_pdf_file(printer: *mut i8, file: *mut i8, job_name: *mut i8) -> bool {
+    unsafe {
+        if printer.is_null() || file.is_null() {
+            eprintln!("Error: One or more arguments are null");
+            return false;
+        }
+
+        let cstr_printer = CStr::from_ptr(printer);
+        let printer_name = match cstr_printer.to_str() {
+            Ok(n) => n,
+            Err(_) => {
+                eprintln!("Invalid UTF-8 in printer name");
+                return false;
+            }
+        };
+
+        let cstr_file = CStr::from_ptr(file);
+        let file_path = match cstr_file.to_str() {
+            Ok(f) => f,
+            Err(_) => {
+                eprintln!("Invalid UTF-8 in file path");
+                return false;
+            }
+        };
+
+        let job_name_str = if job_name.is_null() {
+            None
+        } else {
+            Some(
+                match CStr::from_ptr(job_name).to_str() {
+                    Ok(s) => s,
+                    Err(_) => {
+                        eprintln!("Invalid UTF-8 in job name");
+                        return false;
+                    }
+                },
+            )
+        };
+
+        match print_pdf(printer_name, file_path, job_name_str) {
+            Ok(_) => {
+                println!("PDF sent to printer successfully.");
+                true
+            }
+            Err(e) => {
+                eprintln!("Error printing PDF: {}", e);
+                false
+            }
+        }
+    }
+}
+
+pub fn print_pdf(printer: &str, file_path: &str, _job_name: Option<&str>) -> Result<(), String> {
+    #[cfg(target_os = "windows")]
+    {
+        // Windows: użyj polecenia PowerShell do drukowania pliku PDF
+        use std::process::Command;
+
+        let printer_arg = format!("{}", printer);
+        let mut command = Command::new("powershell");
+        command.args(&[
+            "-NoProfile",
+            "-Command",
+            &format!(
+                r#"Start-Process -FilePath "{}" -Verb Print -ArgumentList '/p /h "{}"'"#,
+                file_path, printer_arg
+            ),
+        ]);
+
+        let output = command.output().map_err(|e| format!("Failed to run powershell: {}", e))?;
+
+        if output.status.success() {
+            Ok(())
+        } else {
+            Err(format!(
+                "Printing failed: {}",
+                String::from_utf8_lossy(&output.stderr)
+            ))
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        // Linux: użyj `lp` z podaniem drukarki
+        use std::process::Command;
+
+        let mut cmd = Command::new("lp");
+        cmd.arg("-d").arg(printer).arg(file_path);
+
+        if let Some(name) = _job_name {
+            cmd.arg("-t").arg(name);
+        }
+
+        let output = cmd.output().map_err(|e| format!("Failed to run lp: {}", e))?;
+
+        if output.status.success() {
+            Ok(())
+        } else {
+            Err(format!(
+                "lp command failed: {}",
+                String::from_utf8_lossy(&output.stderr)
+            ))
+        }
     }
 }
