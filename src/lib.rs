@@ -244,7 +244,7 @@ pub fn my_print(printer_system_name: &str, file_path: &str, job_name: Option<&st
 // from https://crates.io/crates/raw-printer
 #[cfg(target_os = "windows")]
 //pub fn write_to_device(printer: &str, payload: &[u8]) -> Result<usize, std::io::Error> {
-pub fn write_to_device(printer: &str, payload: &str, document_name: Option<&str>) -> Result<usize, std::io::Error> {
+pub fn write_to_device(printer: &str, payload: &[u8]) -> Result<usize, std::io::Error> { //, document_name: Option<&str>    //&str
     use std::ffi::CString;
     use std::ptr;
     use windows::Win32::Foundation::HANDLE;
@@ -271,7 +271,7 @@ pub fn write_to_device(printer: &str, payload: &str, document_name: Option<&str>
         )
         .is_ok()
         {
-            let doc_name = document_name.unwrap_or("Print Job");
+            let doc_name = CString::new("versio").unwrap();
             let doc_name_cstring = CString::new(doc_name).unwrap_or_default();
             
             let doc_info = DOC_INFO_1A {
@@ -291,13 +291,15 @@ pub fn write_to_device(printer: &str, payload: &str, document_name: Option<&str>
                 return Err(std::io::Error::from(windows::core::Error::from_win32()));
             }
 
-            let buffer = payload.as_bytes();
+            //let buffer = payload.as_bytes();
 
             let mut bytes_written: u32 = 0;
             if !WritePrinter(
                 printer_handle,
-                buffer.as_ptr() as _,
-                buffer.len() as u32,
+                // buffer.as_ptr() as _,
+                // buffer.len() as u32,
+                payload.as_ptr() as *const _,
+                payload.len() as u32,
                 &mut bytes_written,
             )
             .as_bool()
